@@ -7,10 +7,13 @@ interface Options<T> {
     retryDelay: number;
 }
 export declare class ConnectionManager<T extends Closeable> {
-    private readonly connectionObservable;
-    private readonly shutdownSubject;
+    private readonly opts;
+    private promise?;
+    private shutdownFlag;
     constructor(opts: Options<T>);
     get(): Promise<T>;
+    private keepAlive;
+    private connectUntilSucceed;
     shutdown(): void;
 }
 export {};

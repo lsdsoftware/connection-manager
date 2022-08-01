@@ -1,4 +1,3 @@
-import * as rxjs from "rxjs"
 
 interface Closeable {
   close(): void
@@ -12,40 +11,59 @@ interface Options<T> {
 
 
 export class ConnectionManager<T extends Closeable> {
-  private readonly connectionObservable: rxjs.Observable<T>
-  private readonly shutdownSubject = new rxjs.BehaviorSubject(false)
+  private promise?: Promise<T>
+  private shutdownFlag = false
 
-  constructor(opts: Options<T>) {
-    this.connectionObservable = this.shutdownSubject
-      .pipe(
-        rxjs.distinctUntilChanged(),
-        rxjs.switchMap(shutdown => {
-          if (shutdown) {
-            return rxjs.throwError(() => new Error("Shutting down"))
-          }
-          else {
-            let con: T
-            return rxjs.defer(opts.connect)
-              .pipe(
-                rxjs.retry({ delay: opts.retryDelay }),
-                rxjs.tap(value => con = value),
-                rxjs.concatMap(con => new rxjs.Observable<T>(sub => {
-                  sub.next(con)
-                  con.once("close", () => sub.error(new Error("Connection closed")))
-                })),
-                rxjs.finalize(() => con.close())
-              )
-          }
-        }),
-        rxjs.shareReplay({ bufferSize: 1, refCount: false })
-      )
+  constructor(private readonly opts: Options<T>) {
   }
 
   get() {
-    return rxjs.firstValueFrom(this.connectionObservable)
+    if (!this.promise) {
+      this.promise = new Promise(fulfill => {
+        let firstTime = true
+        this.keepAlive(promise => {
+          if (firstTime) {
+            fulfill(promise)
+            firstTime = false
+          }
+          else {
+            this.promise = promise
+          }
+        })
+      })
+    }
+    return this.promise
+  }
+
+  private async keepAlive(onUpdate: (promise: Promise<T>) => void): Promise<void> {
+    try {
+      while (true) {
+        const promise = this.connectUntilSucceed()
+        onUpdate(promise)
+        const connection = await promise
+        await new Promise(f => connection.once("close", f))
+      }
+    }
+    catch(err) {
+    }
+  }
+
+  private async connectUntilSucceed() {
+    while (true) {
+      if (this.shutdownFlag) throw new Error("Shutting down")
+      try {
+        return await this.opts.connect()
+      }
+      catch(err) {
+        await new Promise(f => setTimeout(f, this.opts.retryDelay))
+      }
+    }
   }
 
   shutdown() {
-    this.shutdownSubject.next(true)
+    this.shutdownFlag = true
+    this.promise
+      ?.then(con => con.close())
+      .catch(err => "OK")
   }
 }
